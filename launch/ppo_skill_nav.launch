@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 检查ROS版本是否为Melodic -->
+  <arg name="is_melodic" default="$(eval env('ROS_DISTRO') == 'melodic')" />
+
+  <!-- 启动PPO技能选择器 -->
+  <node unless="$(arg is_melodic)" pkg="ppo_indoor_navigation" type="ppo_skill_selector.py" name="ppo_skill_selector" output="screen">
+  </node>
+
+  <!-- 在Melodic中，使用Python 3启动节点 -->
+  <node if="$(arg is_melodic)" pkg="ppo_indoor_navigation" type="ppo_skill_selector.py" name="ppo_skill_selector" output="screen" launch-prefix="python3">
+  </node>
+</launch> 
