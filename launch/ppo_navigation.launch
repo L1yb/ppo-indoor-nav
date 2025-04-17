@@ -1,0 +1,13 @@
+<launch>
+  <!-- 启动ROS-PPO桥接节点(Python 2.7) -->
+  <node pkg="ppo_indoor_navigation" type="ros_ppo_bridge.py" name="ros_ppo_bridge" output="screen" />
+  
+  <!-- 添加参数用于在启动文件中控制PPO节点 -->
+  <arg name="start_ppo" default="true" />
+  
+  <!-- 条件启动PPO节点(Python 3.8) -->
+  <group if="$(arg start_ppo)">
+    <!-- 这里使用env-loader启动Python 3环境 -->
+    <node pkg="ppo_indoor_navigation" type="run_ppo.sh" name="ppo_skill_selector_py3" output="screen" />
+  </group>
+</launch> 

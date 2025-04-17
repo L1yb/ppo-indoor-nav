@@ -6,10 +6,7 @@ import torch.nn as nn
 import numpy as np
 from torch.optim import Adam
 from torch.distributions import Categorical
-from geometry_msgs.msg import Twist, PoseStamped
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import LaserScan
-from tf.transformations import euler_from_quaternion
+from std_msgs.msg import Float32MultiArray, Int32
 import os
 
 # 确保CUDA可用性
@@ -39,16 +36,14 @@ class SkillCritic(nn.Module):
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
-
-
         )
     
     def forward(self, x):
-        return self.network(x) ---
+        return self.network(x)
 
 class PPOSkillSelector:
     def __init__(self):
-        rospy.init_node('ppo_skill_selector')
+        rospy.init_node('ppo_skill_selector_py3')
         
         # 参数设置
         self.state_dim = 12  # 雷达特征(8) + 目标距离角度(2) + 机器人朝向(2)
@@ -73,16 +68,11 @@ class PPOSkillSelector:
         self.load_model()
         
         # 初始化订阅和发布
-        self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback)
-        self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
-        self.goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.goal_callback)
-        self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        self.state_sub = rospy.Subscriber('/ppo/state', Float32MultiArray, self.state_callback)
+        self.action_pub = rospy.Publisher('/ppo/action', Int32, queue_size=10)
         
         # 状态变量
-        self.laser_data = None
-        self.robot_pos = None
-        self.robot_yaw = None
-        self.goal_pos = None
+        self.current_state = None
         self.last_state = None
         self.last_action = None
         
@@ -93,15 +83,6 @@ class PPOSkillSelector:
         self.log_probs = []
         self.values = []
         self.dones = []
-        
-        # 技能定义
-        self.skills = [
-            (0.3, 0.0),     # 直行
-            (0.2, 0.3),     # 小左转
-            (0.2, -0.3),    # 小右转
-            (0.15, 0.6),    # 大左转
-            (0.15, -0.6)    # 大右转
-        ]
         
         # 奖励参数
         self.goal_radius = 0.5  # 目标达成半径
@@ -115,75 +96,67 @@ class PPOSkillSelector:
         self.episode_count = 0
         self.episode_reward = 0
         
-        rospy.Timer(rospy.Duration(0.1), self.control_loop)
-        rospy.loginfo("PPO技能选择器已初始化")
+        rospy.loginfo("PPO技能选择器(Python 3)已初始化")
         
-    def laser_callback(self, msg):
-        """处理激光雷达数据"""
-        self.laser_data = np.array(msg.ranges)
-        # 替换inf值
-        self.laser_data[np.isinf(self.laser_data)] = msg.range_max
+    def state_callback(self, msg):
+        """处理从桥接节点接收的状态数据"""
+        state_array = np.array(msg.data)
+        self.current_state = torch.FloatTensor(state_array).to(device)
         
-    def odom_callback(self, msg):
-        """处理里程计数据"""
-        pos = msg.pose.pose.position
-        self.robot_pos = np.array([pos.x, pos.y])
+        # 执行PPO决策
+        self.process_state()
         
-        # 提取朝向
-        quat = msg.pose.pose.orientation
-        _, _, self.robot_yaw = euler_from_quaternion([quat.x, quat.y, quat.z, quat.w])
-    
-    def goal_callback(self, msg):
-        """处理目标点数据"""
-        self.goal_pos = np.array([msg.pose.position.x, msg.pose.position.y])
-        rospy.loginfo(f"收到新目标点: ({self.goal_pos[0]:.2f}, {self.goal_pos[1]:.2f})")
-        
-    def get_state(self):
-        """构建状态表示"""
-        if self.laser_data is None or self.robot_pos is None or self.goal_pos is None:
-            return None
+    def process_state(self):
+        """处理当前状态并做出决策"""
+        if self.current_state is None:
+            return
             
-        # 雷达特征提取 (降维到8个方向)
-        laser_bins = []
-        bin_size = len(self.laser_data) // 8
-        for i in range(8):
-            start_idx = i * bin_size
-            end_idx = (i + 1) * bin_size
-            laser_bins.append(np.min(self.laser_data[start_idx:end_idx]))
-        laser_features = np.array(laser_bins) / 5.0  # 归一化
+        # 选择动作
+        action, log_prob, value = self.select_skill(self.current_state)
         
-        # 目标点相对位置 (距离和角度)
-        dx = self.goal_pos[0] - self.robot_pos[0]
-        dy = self.goal_pos[1] - self.robot_pos[1]
-        goal_dist = np.sqrt(dx*dx + dy*dy)
-        goal_angle = np.arctan2(dy, dx) - self.robot_yaw
-        goal_angle = np.arctan2(np.sin(goal_angle), np.cos(goal_angle))  # 归一化到[-pi, pi]
+        # 发布动作
+        action_msg = Int32()
+        action_msg.data = action
+        self.action_pub.publish(action_msg)
         
-        # 构建完整状态向量
-        state = np.concatenate([
-            laser_features,  # 8维雷达特征
-            [goal_dist/10.0, goal_angle/np.pi],  # 归一化的目标距离和角度
-            [np.cos(self.robot_yaw), np.sin(self.robot_yaw)]  # 机器人朝向
-        ])
+        # 训练流程
+        if self.training and self.last_state is not None:
+            # 计算奖励
+            reward, done = self.calculate_reward(self.last_state, self.current_state, self.last_action)
+            self.episode_reward += reward
+            
+            # 存储经验
+            self.states.append(self.last_state.unsqueeze(0))
+            self.actions.append(self.last_action)
+            self.rewards.append(reward)
+            self.log_probs.append(self.last_log_prob.unsqueeze(0))
+            self.values.append(self.last_value)
+            self.dones.append(done)
+            
+            # 检查是否更新模型
+            self.step_count += 1
+            if self.step_count % self.update_interval == 0 or done:
+                self.update_policy()
+                
+            # 目标达成通知
+            if done and reward > 0:
+                rospy.loginfo(f"目标点到达成功！")
         
-        return torch.FloatTensor(state).to(device)
+        # 保存当前状态作为下一步的上一状态
+        self.last_state = self.current_state
+        self.last_action = action
+        self.last_log_prob = log_prob
+        self.last_value = value
     
     def select_skill(self, state):
         """选择技能（动作）"""
         with torch.no_grad():
-            probs = self.actor(state)          # 获取每个技能的概率
-            value = self.critic(state)         # 获取状态价值估计
-            dist = Categorical(probs)          # 构建概率分布
-            action = dist.sample()             # 从分布中采样动作
-            log_prob = dist.log_prob(action)   # 记录动作的对数概率
+            probs = self.actor(state)
+            value = self.critic(state)
+            dist = Categorical(probs)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
         return action.item(), log_prob, value
-    
-    def execute_skill(self, skill_idx):
-        """执行选定的技能"""
-        cmd = Twist()
-        cmd.linear.x, cmd.angular.z = self.skills[skill_idx]
-        #先不发布速度
-        #self.cmd_vel_pub.publish(cmd)
     
     def calculate_reward(self, state, next_state, action):
         """计算奖励"""
@@ -305,47 +278,6 @@ class PPOSkillSelector:
         # 定期保存模型
         if self.step_count % self.save_interval == 0:
             self.save_model()
-    
-    def control_loop(self, event):
-        """主控制循环"""
-        state = self.get_state()
-        if state is None:
-            return
-            
-        # 选择动作
-        action, log_prob, value = self.select_skill(state)
-        
-        # 执行动作
-        self.execute_skill(action)
-        
-        # 训练流程
-        if self.training and self.last_state is not None:
-            # 计算奖励
-            reward, done = self.calculate_reward(self.last_state, state, self.last_action)
-            self.episode_reward += reward
-            
-            # 存储经验
-            self.states.append(self.last_state.unsqueeze(0))
-            self.actions.append(self.last_action)
-            self.rewards.append(reward)
-            self.log_probs.append(self.last_log_prob.unsqueeze(0))
-            self.values.append(self.last_value)
-            self.dones.append(done)
-            
-            # 检查是否更新模型
-            self.step_count += 1
-            if self.step_count % self.update_interval == 0 or done:
-                self.update_policy()
-                
-            # 目标达成通知
-            if done and reward > 0:
-                rospy.loginfo("目标点到达成功！")
-        
-        # 保存当前状态作为下一步的上一状态
-        self.last_state = state
-        self.last_action = action
-        self.last_log_prob = log_prob
-        self.last_value = value
 
     def save_model(self):
         """保存模型"""
