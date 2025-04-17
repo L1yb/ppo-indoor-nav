@@ -47,6 +47,7 @@ class ROSPPOBridge:
     
     def laser_callback(self, msg):
         """处理激光雷达数据"""
+        # print(msg.ranges)
         self.laser_data = np.array(msg.ranges)
         # 替换inf值
         self.laser_data[np.isinf(self.laser_data)] = msg.range_max
@@ -71,11 +72,18 @@ class ROSPPOBridge:
         if 0 <= action_idx < len(self.skills):
             cmd = Twist()
             cmd.linear.x, cmd.angular.z = self.skills[action_idx]
-            self.cmd_vel_pub.publish(cmd)
+            # self.cmd_vel_pub.publish(cmd)
     
     def get_state(self):
         """构建状态表示并发布"""
         if self.laser_data is None or self.robot_pos is None or self.goal_pos is None:
+            if(self.laser_data is None):
+                print("laser is none")
+            if(self.robot_pos is None):
+                print("pos is none")
+            if(self.goal_pos is None):
+                print("goal is none")
+            # print("state is none")
             return
             
         # 雷达特征提取 (降维到8个方向)
@@ -104,6 +112,7 @@ class ROSPPOBridge:
         # 发布状态
         state_msg = Float32MultiArray()
         state_msg.data = state.tolist()
+        print(state_msg)
         self.state_pub.publish(state_msg)
     
     def main_loop(self, event):

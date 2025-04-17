@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 找到conda的环境
-source ~/miniconda3/etc/profile.d/conda.sh
+# source ~/miniconda3/etc/profile.d/conda.sh
+source /home/lyb/anaconda3/condabin/conda
 
 # 激活Python 3.8环境
 conda activate scene  # 请替换为您实际的环境名称
