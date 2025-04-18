@@ -101,9 +101,9 @@ class PPOSkillSelector:
         
         # 探索和引导参数
         self.exploration_temp = 1.0  # 探索温度参数
-        self.initial_exploration_rate = 0.9  # 初始探索率
-        self.min_exploration_rate = 0.1  # 最小探索率
-        self.exploration_decay = 0.9995  # 探索率衰减
+        self.initial_exploration_rate = 0.95  # 提高初始探索率，使干预更有效
+        self.min_exploration_rate = 0.3  # 提高最小探索率，确保长期干预效果
+        self.exploration_decay = 0.9998  # 降低衰减速度，使干预持续更长时间
         self.current_exploration_rate = self.initial_exploration_rate
         
         # 路径跟踪和修正参数
@@ -221,17 +221,40 @@ class PPOSkillSelector:
                         probs_np[2] = max(probs_np[2] * 2, 0.4)  # 增加右小转概率
                     probs_np[0] *= 0.1  # 大幅降低前进概率
                 
-                # 2. 根据目标角度调整转向概率
-                if abs(goal_angle) > 0.5:  # 目标不在正前方
-                    if goal_angle > 0:  # 目标在左侧
-                        probs_np[1] = max(probs_np[1], 0.3)  # 左小转
-                        probs_np[3] = max(probs_np[3], 0.2)  # 左大转
-                    else:  # 目标在右侧
-                        probs_np[2] = max(probs_np[2], 0.3)  # 右小转
-                        probs_np[4] = max(probs_np[4], 0.2)  # 右大转
-                else:  # 目标基本在前方
+                # 2. 根据目标角度调整转向概率 - 增强版
+                if abs(goal_angle) < 0.3:  # 几乎正前方
                     if np.min(laser_data[:3]) > 0.7:  # 前方无障碍
-                        probs_np[0] = max(probs_np[0], 0.6)  # 大幅增加前进概率
+                        probs_np[0] = 0.8  # 大幅增加前进概率
+                        # 其他动作概率降低
+                        probs_np[1:] *= 0.2
+                        rospy.loginfo_throttle(2.0, "目标在正前方，优先直行")
+                elif abs(goal_angle) < 0.8:  # 偏左/偏右方向
+                    if goal_angle > 0:  # 目标在左侧
+                        probs_np[1] = 0.7  # 大幅增加左小转概率
+                        probs_np[0] = 0.2  # 保持一定前进概率
+                        probs_np[2:] *= 0.1  # 其他动作概率大幅降低
+                        rospy.loginfo_throttle(2.0, "目标在左前方，增加左转概率")
+                    else:  # 目标在右侧
+                        probs_np[2] = 0.7  # 大幅增加右小转概率
+                        probs_np[0] = 0.2  # 保持一定前进概率
+                        probs_np[1] = 0.05  # 左转概率降低
+                        probs_np[3:] *= 0.1  # 其他动作概率大幅降低
+                        rospy.loginfo_throttle(2.0, "目标在右前方，增加右转概率")
+                else:  # 目标在较大角度偏离
+                    if goal_angle > 0:  # 目标在左侧
+                        probs_np[3] = 0.75  # 使用左大转
+                        probs_np[1] = 0.2  # 辅助使用左小转
+                        probs_np[0] = 0.05  # 几乎不前进
+                        probs_np[2] = 0.0  # 禁止右转
+                        probs_np[4] = 0.0
+                        rospy.loginfo_throttle(2.0, "目标在左侧大角度，强制左转")
+                    else:  # 目标在右侧
+                        probs_np[4] = 0.75  # 使用右大转
+                        probs_np[2] = 0.2  # 辅助使用右小转
+                        probs_np[0] = 0.05  # 几乎不前进
+                        probs_np[1] = 0.0  # 禁止左转
+                        probs_np[3] = 0.0
+                        rospy.loginfo_throttle(2.0, "目标在右侧大角度，强制右转")
                 
                 # 3. 如果检测到持续偏离轨道，强制修正
                 if self.wrong_direction_count > self.max_wrong_direction:
@@ -300,10 +323,10 @@ class PPOSkillSelector:
         
         # 6. 新增：朝向目标奖励 (重要)
         angle_diff = abs(next_goal_angle) - abs(goal_angle)
-        direction_reward = 3.0 if angle_diff < -0.1 else -1.5 if angle_diff > 0.1 else 0.0
+        direction_reward = 6.0 if angle_diff < -0.1 else -3.5 if angle_diff > 0.1 else 0.0
         
         # 7. 新增：保持良好朝向奖励
-        heading_reward = 1.0 if abs(next_goal_angle) < 0.3 and action == 0 else 0.0
+        heading_reward = 2.0 if abs(next_goal_angle) < 0.3 and action == 0 else 0.0
         
         # 更新历史目标距离
         self.prev_goal_dists.append(next_goal_dist)
