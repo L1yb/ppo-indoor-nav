@@ -72,7 +72,7 @@ class ROSPPOBridge:
         if 0 <= action_idx < len(self.skills):
             cmd = Twist()
             cmd.linear.x, cmd.angular.z = self.skills[action_idx]
-            # self.cmd_vel_pub.publish(cmd)
+            self.cmd_vel_pub.publish(cmd)
     
     def get_state(self):
         """构建状态表示并发布"""
@@ -112,7 +112,7 @@ class ROSPPOBridge:
         # 发布状态
         state_msg = Float32MultiArray()
         state_msg.data = state.tolist()
-        print(state_msg)
+        # print(state_msg)
         self.state_pub.publish(state_msg)
     
     def main_loop(self, event):

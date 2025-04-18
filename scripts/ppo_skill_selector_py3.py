@@ -62,7 +62,7 @@ class PPOSkillSelector:
         self.critic_optimizer = Adam(self.critic.parameters(), lr=self.lr)
         
         # 如果存在模型则加载
-        self.model_path = os.path.expanduser("~/catkin_ws/src/ppo_indoor_nav/model")
+        self.model_path = os.path.expanduser("~/catkin_ws/src/ppo-indoor-nav/model")
         if not os.path.exists(self.model_path):
             os.makedirs(self.model_path)
         self.load_model()
