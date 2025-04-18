@@ -97,14 +97,26 @@ class ROSPPOBridge:
         """重置机器人位置"""
         rospy.loginfo("收到重置信号，重置机器人位置")
         
-        # 如果是在仿真环境中，可以使用以下方法重置机器人位置
+        # 记录重置前的位置信息
+        rospy.loginfo("重置前位置: ({:.2f}, {:.2f})".format(
+            self.robot_pos[0], self.robot_pos[1]))
+        
+        # 尝试多种方法重置机器人位置
+        reset_success = False
+        
+        # 方法1: 使用Gazebo服务重置模型位置
         try:
-            # 对于Gazebo仿真环境，可以使用服务调用重置机器人位置
+            # 导入Gazebo相关消息
             from gazebo_msgs.msg import ModelState
             from gazebo_msgs.srv import SetModelState
             
+            # 使用确定的模型名称
+            robot_model_name = 'mycar'  # 根据launch文件中的指定名称
+            rospy.loginfo("使用机器人模型名称: {}".format(robot_model_name))
+            
+            # 设置模型状态
             model_state = ModelState()
-            model_state.model_name = 'mobile_base'  # 根据实际机器人模型名称调整
+            model_state.model_name = robot_model_name
             model_state.pose.position.x = self.initial_pos[0]
             model_state.pose.position.y = self.initial_pos[1]
             model_state.pose.position.z = 0.0
@@ -125,22 +137,112 @@ class ROSPPOBridge:
             model_state.twist.angular.y = 0
             model_state.twist.angular.z = 0
             
+            # 设置参考框架
+            model_state.reference_frame = 'world'
+            
             # 调用服务设置模型状态
-            rospy.wait_for_service('/gazebo/set_model_state')
+            rospy.wait_for_service('/gazebo/set_model_state', timeout=2.0)
             set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
-            set_model_state(model_state)
+            resp = set_model_state(model_state)
             
-            rospy.loginfo("机器人位置已重置到: ({:.2f}, {:.2f})".format(
-                self.initial_pos[0], self.initial_pos[1]))
+            if resp.success:
+                rospy.loginfo("通过Gazebo服务成功重置机器人位置: ({:.2f}, {:.2f})".format(
+                    self.initial_pos[0], self.initial_pos[1]))
+                reset_success = True
+            else:
+                rospy.logwarn("Gazebo重置服务调用失败: {}".format(resp.status_message))
+        
         except Exception as e:
-            rospy.logerr("重置机器人位置失败: {}".format(e))
+            rospy.logwarn("方法1失败: {}".format(e))
+        
+        # 方法2: 发布ROS话题进行重置
+        if not reset_success:
+            try:
+                # 尝试发布到/gazebo/set_model_state话题
+                from gazebo_msgs.msg import ModelState
+                model_state_pub = rospy.Publisher('/gazebo/set_model_state', ModelState, queue_size=10)
+                
+                model_state = ModelState()
+                model_state.model_name = 'mycar'  # 使用launch文件中指定的名称
+                model_state.pose.position.x = self.initial_pos[0]
+                model_state.pose.position.y = self.initial_pos[1]
+                model_state.pose.position.z = 0.0
+                
+                # 设置朝向
+                from tf.transformations import quaternion_from_euler
+                quat = quaternion_from_euler(0, 0, self.initial_yaw)
+                model_state.pose.orientation.x = quat[0]
+                model_state.pose.orientation.y = quat[1]
+                model_state.pose.orientation.z = quat[2]
+                model_state.pose.orientation.w = quat[3]
+                
+                # 发布多次以确保消息传递
+                for i in range(3):
+                    model_state_pub.publish(model_state)
+                    rospy.sleep(0.1)
+                
+                rospy.loginfo("通过发布ModelState话题重置机器人位置")
+                reset_success = True
+            except Exception as e:
+                rospy.logwarn("方法2失败: {}".format(e))
+        
+        # 方法3: 通过/initialpose重置AMCL定位
+        if not reset_success:
+            try:
+                # 发布到/initialpose话题 (用于AMCL定位重置)
+                from geometry_msgs.msg import PoseWithCovarianceStamped
+                
+                init_pose_pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1, latch=True)
+                
+                init_pose = PoseWithCovarianceStamped()
+                init_pose.header.stamp = rospy.Time.now()
+                init_pose.header.frame_id = "map"
+                
+                init_pose.pose.pose.position.x = self.initial_pos[0]
+                init_pose.pose.pose.position.y = self.initial_pos[1]
+                
+                from tf.transformations import quaternion_from_euler
+                quat = quaternion_from_euler(0, 0, self.initial_yaw)
+                init_pose.pose.pose.orientation.x = quat[0]
+                init_pose.pose.pose.orientation.y = quat[1]
+                init_pose.pose.pose.orientation.z = quat[2]
+                init_pose.pose.pose.orientation.w = quat[3]
+                
+                # 设置协方差矩阵 (对角线元素)
+                cov = [0.1, 0.0, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.1, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                       0.0, 0.0, 0.0, 0.0, 0.0, 0.1]
+                init_pose.pose.covariance = cov
+                
+                # 发布初始位姿
+                init_pose_pub.publish(init_pose)
+                rospy.sleep(0.5)  # 给一点时间让消息传递
+                
+                rospy.loginfo("通过/initialpose话题重置机器人位置")
+                reset_success = True
+                
+            except Exception as e:
+                rospy.logwarn("方法3失败: {}".format(e))
+        
+        # 最后手段: 通过发送空速度停止机器人
+        cmd = Twist()
+        cmd.linear.x = 0.0
+        cmd.angular.z = 0.0
+        self.cmd_vel_pub.publish(cmd)
+        
+        # 如果所有方法都失败，发出停止命令并通知
+        if not reset_success:
+            rospy.logwarn("所有重置方法失败，已停止机器人。可能需要手动重置机器人位置。")
             
-            # 如果Gazebo服务不可用，停止机器人作为备选方案
-            cmd = Twist()
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            self.cmd_vel_pub.publish(cmd)
-            rospy.loginfo("已停止机器人运动")
+            # 多次发送停止命令确保机器人停止
+            for i in range(5):
+                self.cmd_vel_pub.publish(cmd)
+                rospy.sleep(0.1)
+        
+        return reset_success
     
     def get_state(self):
         """构建状态表示并发布"""
