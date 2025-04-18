@@ -194,7 +194,7 @@ class PPOSkillSelector:
     def compute_gae(self):
         """计算广义优势估计(GAE)"""
         values = torch.cat(self.values).flatten()
-        rewards = torch.tensor(self.rewards, device=device)
+        rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
         
         advantages = torch.zeros_like(rewards)
