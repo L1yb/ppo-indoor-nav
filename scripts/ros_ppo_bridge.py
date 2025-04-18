@@ -42,10 +42,10 @@ class ROSPPOBridge:
         # 技能定义
         self.skills = [
             (0.3, 0.0),     # 直行
-            (0.2, 0.3),     # 小左转
-            (0.2, -0.3),    # 小右转
-            (0.15, 0.6),    # 大左转
-            (0.15, -0.6)    # 大右转
+            (0.2, 0.4),     # 小左转 - 角速度从0.3增加到0.4
+            (0.2, -0.4),    # 小右转 - 角速度从-0.3增加到-0.4
+            (0.15, 0.8),    # 大左转 - 角速度从0.6增加到0.8
+            (0.15, -0.8)    # 大右转 - 角速度从-0.6增加到-0.8
         ]
         
         # 主循环
@@ -83,6 +83,19 @@ class ROSPPOBridge:
     def action_callback(self, msg):
         """接收PPO算法选择的动作并执行"""
         action_idx = msg.data
+        
+        # 处理停止命令
+        if action_idx == 99:  # 特殊动作代码，表示停止
+            cmd = Twist()
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            # 多次发送停止命令确保小车停止
+            for i in range(3):
+                self.cmd_vel_pub.publish(cmd)
+                rospy.sleep(0.1)
+            rospy.loginfo("小车已停止")
+            return
+            
         if 0 <= action_idx < len(self.skills):
             cmd = Twist()
             cmd.linear.x, cmd.angular.z = self.skills[action_idx]

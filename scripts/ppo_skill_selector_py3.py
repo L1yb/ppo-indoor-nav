@@ -164,6 +164,12 @@ class PPOSkillSelector:
                 # 重置轨迹监控参数
                 self.wrong_direction_count = 0
                 self.prev_goal_dists = []
+                
+                # 发送停止命令
+                stop_action = Int32()
+                stop_action.data = 99  # 特殊动作代码，表示停止
+                self.action_pub.publish(stop_action)
+                rospy.loginfo("已发送停止命令")
             
             # 碰撞后的重置逻辑
             if done and np.min(self.current_state.cpu().numpy()[:8]) < 0.1:  # 检测到碰撞
