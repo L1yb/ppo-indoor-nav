@@ -72,7 +72,8 @@ class ROSPPOBridge:
         if self.initial_pos is None:
             self.initial_pos = self.robot_pos.copy()
             self.initial_yaw = self.robot_yaw
-            rospy.loginfo(f"保存初始位置: ({self.initial_pos[0]:.2f}, {self.initial_pos[1]:.2f}), 朝向: {self.initial_yaw:.2f}")
+            rospy.loginfo("保存初始位置: ({:.2f}, {:.2f}), 朝向: {:.2f}".format(
+                self.initial_pos[0], self.initial_pos[1], self.initial_yaw))
     
     def goal_callback(self, msg):
         """处理目标点数据"""
@@ -129,9 +130,10 @@ class ROSPPOBridge:
             set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
             set_model_state(model_state)
             
-            rospy.loginfo(f"机器人位置已重置到: ({self.initial_pos[0]:.2f}, {self.initial_pos[1]:.2f})")
+            rospy.loginfo("机器人位置已重置到: ({:.2f}, {:.2f})".format(
+                self.initial_pos[0], self.initial_pos[1]))
         except Exception as e:
-            rospy.logerr(f"重置机器人位置失败: {e}")
+            rospy.logerr("重置机器人位置失败: {}".format(e))
             
             # 如果Gazebo服务不可用，停止机器人作为备选方案
             cmd = Twist()
