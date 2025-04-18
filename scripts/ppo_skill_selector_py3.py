@@ -70,6 +70,7 @@ class PPOSkillSelector:
         # 初始化订阅和发布
         self.state_sub = rospy.Subscriber('/ppo/state', Float32MultiArray, self.state_callback)
         self.action_pub = rospy.Publisher('/ppo/action', Int32, queue_size=10)
+        self.hint_pub = rospy.Publisher('/ppo/hint', Float32MultiArray, queue_size=10)
         
         # 状态变量
         self.current_state = None
@@ -95,6 +96,13 @@ class PPOSkillSelector:
         self.step_count = 0
         self.episode_count = 0
         self.episode_reward = 0
+        
+        # 在初始化中增加
+        self.exploration_temp = 1.0  # 探索温度参数
+        
+        # 添加降低探索的逻辑
+        if self.step_count % 1000 == 0 and self.exploration_temp > 0.5:
+            self.exploration_temp *= 0.95  # 逐渐降低探索
         
         rospy.loginfo("PPO技能选择器(Python 3)已初始化")
         
@@ -141,18 +149,48 @@ class PPOSkillSelector:
             # 目标达成通知
             if done and reward > 0:
                 rospy.loginfo(f"目标点到达成功！")
+            
+            # 在process_state方法中增加碰撞后的重置逻辑
+            if done and np.min(self.current_state.cpu().numpy()[:8]) < 0.1:  # 检测到碰撞
+                rospy.loginfo("检测到碰撞，准备重置机器人位置")
+                # 发布重置信号到仿真环境
+                reset_msg = Int32()
+                reset_msg.data = 1
+                self.reset_pub.publish(reset_msg)
+                
+                # 清空当前状态
+                self.last_state = None
+                self.current_state = None
+                self.episode_reward = 0
         
         # 保存当前状态作为下一步的上一状态
         self.last_state = self.current_state
         self.last_action = action
         self.last_log_prob = log_prob
         self.last_value = value
+        
+        # 在process_state方法中增加提示发布
+        next_laser_features = self.current_state.cpu().numpy()[:8]
+        if np.min(next_laser_features) < 0.3:
+            hint_msg = Float32MultiArray()
+            # 根据激光雷达数据计算最佳逃离方向
+            best_direction = np.argmax(next_laser_features)
+            hint_msg.data = [best_direction]
+            self.hint_pub.publish(hint_msg)
     
     def select_skill(self, state):
         """选择技能（动作）"""
         with torch.no_grad():
             probs = self.actor(state)
             value = self.critic(state)
+            
+            # 安全检查：如果前方障碍物很近，降低向前动作的概率
+            laser_data = state.cpu().numpy()[:8]
+            if np.min(laser_data[:3]) < 0.5:  # 前方三个方向有障碍物
+                probs_np = probs.cpu().numpy()
+                probs_np[0] *= 0.1  # 降低前进概率
+                probs = torch.from_numpy(probs_np).to(device)
+                
             dist = Categorical(probs)
             action = dist.sample()
             log_prob = dist.log_prob(action)
@@ -175,10 +213,10 @@ class PPOSkillSelector:
         progress_reward = (goal_dist - next_goal_dist) * 10.0
         
         # 2. 碰撞惩罚
-        collision_penalty = -20.0 if np.min(next_laser_features) < 0.1 else 0.0
+        obstacle_penalty = -2.0 * np.exp(-3 * np.min(next_laser_features))  # 增大惩罚系数
         
         # 3. 接近障碍物惩罚
-        obstacle_penalty = -0.5 * np.exp(-5 * np.min(next_laser_features))
+        obstacle_trend_penalty = -1.0 if np.min(next_laser_features) < np.min(laser_features) else 0.0
         
         # 4. 目标达成奖励
         goal_reward = 50.0 if next_goal_dist < self.goal_radius else 0.0
@@ -186,7 +224,7 @@ class PPOSkillSelector:
         # 5. 平滑性奖励 (鼓励适当时使用直行)
         smoothness_reward = 0.2 if action == 0 and np.min(next_laser_features) > 0.5 else 0.0
         
-        total_reward = progress_reward + collision_penalty + obstacle_penalty + goal_reward + smoothness_reward
+        total_reward = progress_reward + obstacle_penalty + obstacle_trend_penalty + goal_reward + smoothness_reward
         done = (next_goal_dist < self.goal_radius) or (np.min(next_laser_features) < 0.1)
         
         return total_reward, done
